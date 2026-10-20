@@ -9,7 +9,7 @@
       "Bash(npm test:*)",
       "Bash(npm --prefix:*)",
       "Read(//home/vscode/.herdr/worktrees/**)",
-      "Write(//home/vscode/.herdr/worktrees/**/.delegate/**)"
+      "Edit(//home/vscode/.herdr/worktrees/**/.delegate/**)"
     ],
     "deny": [
       "Bash(git push:*)"

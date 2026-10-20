@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Recreate the throwaway demo repo /tmp/h1-demo (ESM JS + node --test).
+set -euo pipefail
+D=/tmp/h1-demo
+for wt in $(git -C "$D" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2}' | tail -n +2); do
+  git -C "$D" worktree remove --force "$wt"
+done
+rm -rf "$D" "${XDG_STATE_HOME:-$HOME/.local/state}/dispatch"
+mkdir -p "$D"/{src,test} && cd "$D" && git init -q -b main
+echo '{ "name": "h1-demo", "version": "0.1.0", "type": "module", "scripts": { "test": "node --test" } }' > package.json
+printf '// String helpers.\nexport function capitalize(s) {\n  return s.length ? s[0].toUpperCase() + s.slice(1) : s;\n}\n' > src/strings.js
+cat > test/strings.test.js <<'T'
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { capitalize } from "../src/strings.js";
+
+test("capitalize", () => {
+  assert.equal(capitalize("hello"), "Hello");
+  assert.equal(capitalize(""), "");
+});
+T
+printf 'node_modules/\n.delegate/\n' > .gitignore
+git add -A && git commit -qm initial && echo "demo repo ready: $D"

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Launch Claude Code as the project manager, without touching global config.
+# Run it inside a herdr pane. Extra args go to claude (e.g. --model claude-sonnet-5-5).
+# Usage: bin/pm [repo-dir] [claude args...]
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="${1:-/tmp/h1-demo}"; shift || true
+[[ "${HERDR_ENV:-}" == 1 ]] || echo "warning: not inside a herdr pane; set HERDR_SESSION=<name> for dispatch.sh" >&2
+export PATH="$HOME/.local/bin:$PATH"
+cd "$ROOT"   # the dispatch skill is project-scoped to this repo
+exec claude \
+  --settings "$ROOT/proposed/settings.json" \
+  --append-system-prompt-file "$ROOT/pm-role.CLAUDE.md" \
+  --add-dir "$REPO" --add-dir "$HOME/.herdr/worktrees" \
+  "$@"
