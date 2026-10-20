@@ -45,7 +45,7 @@ Claude in Claude Code), so no built-in tool is lost.
 
 ### dev-cli (`dev`, Go, https://github.com/duy0611/dev-cli)
 - Manages devcontainers, using the devcontainer CLI with Docker or Podman. **This environment is a dev-cli sandbox.**
-- The image already has `claude`, `opencode` (`@opencode/cli`), `hermes`, `mise`, node and gh. **It doesn't have herdr.**
+- The image already has `claude`, `opencode` (`@opencode/cli`), `hermes`, node and gh. **It doesn't have herdr, mise, or the full python3** (only `python3-minimal`; H0 found this).
 - Persistent state volume at `/var/dev-state`: `CLAUDE_CONFIG_DIR`, `OPENCODE_CONFIG_DIR=/var/dev-state/opencode`,
   `HERMES_HOME` and `GIT_CONFIG_GLOBAL` all live there.
 - Secrets are stored as references, never values (`literal:`, `keychain:`, `op://…`), set with `dev workspace set KEY SPEC`
@@ -144,7 +144,7 @@ dev-cli already names these panes in herdr. What still needs checking: herdr's d
 | `.claude/skills/dispatch/SKILL.md` | Our PM procedure (§6) plus the brief template |
 | `~/.claude/CLAUDE.md` or `/var/dev-state/claude/CLAUDE.md` | PM role and rules (§6) |
 | `.claude/settings.json` | Allow `Bash(herdr:*)`, `Bash(git diff:*)`, `Bash(git worktree:*)`. I'll show it to you before applying it |
-| `.devcontainer/devcontainer.json` (project) or a dev-cli PR | Install herdr in the image (mise feature or `postCreateCommand: mise use -g herdr@0.9.5`) and run `herdr integration install opencode claude` |
+| `.devcontainer/devcontainer.json` (project) or a dev-cli PR | Install herdr (official installer, pinned 0.9.5) and the full `python3`; install the herdr integrations into `$OPENCODE_CONFIG_DIR` and `$CLAUDE_CONFIG_DIR` (the OpenCode installer ignores `OPENCODE_CONFIG_DIR`, so copy the files) |
 
 **OpenCode worker agent** (deny by default, so `--auto`-style approval is safe enough):
 ```md
@@ -182,7 +182,7 @@ Finish by writing the result.json described in the brief, then stop.
 Anything in bash that isn't listed is `ask`. herdr then shows the worker as `blocked`, and the PM decides through `send-keys`.
 That way you see the edge cases instead of having them auto-approved.
 
-**Claude Code workers** (escalation): start with `-- --model claude-sonnet-5-5 --permission-mode acceptEdits` plus a
+**Claude Code workers** (escalation): pre-trust worktree folders (herdr doesn't recognise the trust dialog), and note that workers inherit the PM's `CLAUDE_CONFIG_DIR` settings (for example auto mode), so always pass an explicit `--permission-mode`. Start with `-- --model claude-sonnet-5-5 --permission-mode acceptEdits` plus a
 project Bash allowlist. Avoid `--dangerously-skip-permissions` except in an `isolated` container (Layout 2).
 
 ---
@@ -209,14 +209,16 @@ Never accept work without reading the diff and running the acceptance commands y
 Never send a prompt to an agent that isn't idle/done; read its screen first.
 ```
 
-**`/dispatch` skill, step by step:**
+**`/dispatch` skill, step by step** (implemented in `.claude/skills/dispatch/`; herdr calls are wrapped by `dispatch.sh`, which adds an `integrate` step and a `finish` guard):
 1. **Plan.** Split the work into independent tasks (at most 3 in parallel to start). Assign each an `<id>`.
 2. **Isolate.** `herdr worktree create --cwd . --branch ds/<id>` → worktree path `$WT`.
 3. **Brief.** Write `$WT/.delegate/<id>/brief.md` from the template.
 4. **Spawn.**
    `P=$(herdr pane split --current --direction right --cwd "$WT" --no-focus | jq -r …)`
-   `herdr agent start <id> --kind opencode --pane "$P" -- --agent worker`
-5. **Prompt.** `herdr agent prompt <id> "Read and execute .delegate/<id>/brief.md" --wait --until done --until blocked --timeout 1800000`
+   (split with `--env 'OPENCODE_CONFIG_CONTENT={"default_agent":"worker"}'`)
+   `herdr agent start <id> --kind opencode --pane "$P" -- --standalone`   ← `--standalone` is required (H0 gotcha 1–2)
+5. **Prompt.** `herdr agent prompt <id> "Read and execute .delegate/<id>/brief.md" --wait --until idle --until done --until blocked --timeout 1800000`
+   - **Settle check (H0 gotcha 3):** after any wait, sleep 3–5 s and run `agent get` again. The task is finished only when `idle`/`done` holds steadily **and** `result.json` exists. Otherwise wait again.
    - Use Bash `run_in_background` so the PM can dispatch several tasks and get a notification as each finishes.
 6. **Handle the state:**
    - `blocked`: `herdr agent read <id> --lines 60` → approve (`send-keys enter`) or reject (`esc`) with a
@@ -235,7 +237,7 @@ Never send a prompt to an agent that isn't idle/done; read its screen first.
 
 ## 7. Phased implementation
 
-### H0: Feasibility in this sandbox (about 1–2 hours)
+### H0: Feasibility in this sandbox ✅ DONE 2026-10-20, see H0-RESULTS.md
 1. Write `/var/dev-state/opencode/opencode.json` (LiteLLM). Run `opencode models | grep litellm`. Run one smoke test:
    `opencode run -m litellm/deepseek-v4.1-flash "say hi"` in `/tmp/smoke` (a throwaway git repo).
 2. `mise use -g herdr@0.9.5`. Start herdr headless in the Podman container and check that the socket and server work without a host TTY.
@@ -247,7 +249,7 @@ Never send a prompt to an agent that isn't idle/done; read its screen first.
 
 **Exit:** the full lifecycle (spawn, prompt, block, approve, done, read, kill) works from a shell script.
 
-### H1: PM setup in one sandbox (half a day)
+### H1: PM setup in one sandbox ✅ DONE 2026-10-20, see H1-RESULTS.md
 - Create the files in §4: worker agent, herdr skill, `/dispatch` skill, CLAUDE.md section, settings allowlist.
 - Make herdr part of the sandbox: a `postCreateCommand` in the project's devcontainer for now.
 - Dry run: the PM dispatches one real, small task from one of your repos while you watch in `herdr`.
