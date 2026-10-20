@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "defaultMode": "auto",
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(head:*)",
+      "Bash(wc:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run test:*)",
+      "Bash(node --test:*)",
+      "Bash(pytest:*)",
+      "Bash(python3:*)",
+      "Bash(echo:*)"
+    ],
+    "deny": [
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(rm -rf:*)",
+      "Bash(curl:*)",
+      "WebFetch",
+      "WebSearch"
+    ]
+  }
+}

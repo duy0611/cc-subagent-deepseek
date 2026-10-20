@@ -1,0 +1,3 @@
+Private reference implementation used to generate demo/mdx/test/fixtures/*.html.
+Regenerate: node demo/.reference/gen.mjs demo/mdx/test/fixtures
+Do not give this to the PM or workers.

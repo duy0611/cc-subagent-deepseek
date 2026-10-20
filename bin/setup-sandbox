@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Idempotent setup of a dev-cli sandbox for the herdr PM/worker workflow.
+# Installs herdr + full python3, installs the OpenCode LiteLLM config and worker agent, and the herdr
+# integrations into $OPENCODE_CONFIG_DIR / $CLAUDE_CONFIG_DIR (herdr's installer only knows ~/.config/opencode).
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+HERDR_VERSION="${HERDR_VERSION:-0.9.5}"
+OC_DIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
+export PATH="$HOME/.local/bin:$PATH"
+log() { printf '  > %s\n' "$*"; }
+
+# 1. full python3 (herdr's Claude hook needs the json module; the image ships python3-minimal)
+if ! python3 -I -c 'import json' 2>/dev/null; then
+  log "installing python3"
+  sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3 >/dev/null
+fi
+
+# 2. herdr (official installer verifies the SHA-256 from herdr.dev's manifest)
+if [[ "$(herdr --version 2>/dev/null | awk '{print $2}')" != "$HERDR_VERSION" ]]; then
+  log "installing herdr (latest release; expected $HERDR_VERSION)"
+  curl -fsSL https://herdr.dev/install.sh | sh >/dev/null
+  installed="$(herdr --version | awk '{print $2}')"
+  [[ "$installed" == "$HERDR_VERSION" ]] || log "WARNING: got herdr $installed, scripts were tested on $HERDR_VERSION"
+fi
+
+# 3. OpenCode: LiteLLM provider + restricted worker agent
+mkdir -p "$OC_DIR/agents"
+[[ -f "$OC_DIR/opencode.json" ]] || { log "installing opencode.json"; cp "$ROOT/opencode/opencode.json" "$OC_DIR/opencode.json"; }
+cp "$ROOT/opencode/agents/worker.md" "$OC_DIR/agents/worker.md"
+
+# 4. herdr integrations (OpenCode via a scratch HOME, then copied into $OC_DIR)
+tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/.config/opencode"
+HOME="$tmp" herdr integration install opencode >/dev/null
+mkdir -p "$OC_DIR/plugins"
+cp "$tmp/.config/opencode/plugins/herdr-agent-state.js" "$OC_DIR/plugins/"
+cp -r "$tmp/.config/opencode/herdr-tui-session.js" "$tmp/.config/opencode/herdr-opencode" "$OC_DIR/"
+for f in tui.jsonc cli.json; do [[ -f "$OC_DIR/$f" ]] || cp "$tmp/.config/opencode/$f" "$OC_DIR/"; done
+herdr integration install claude >/dev/null
+
+# 5. pick up config changes in the shared OpenCode service
+opencode service restart >/dev/null 2>&1 || true
+
+log "herdr $(herdr --version | awk '{print $2}'), python3 json: $(python3 -I -c 'import json; print("ok")')"
+log "OpenCode models: $(opencode models 2>/dev/null | grep -c '^litellm/') litellm models; worker agent: $(opencode debug agents 2>/dev/null | jq -r '[.[].id] | index("worker") != null')"

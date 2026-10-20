@@ -1,15 +1,22 @@
 #!/usr/bin/env bash
 # Launch Claude Code as the project manager, without touching global config.
 # Run it inside a herdr pane. Extra args go to claude (e.g. --model claude-sonnet-5-5).
-# Usage: bin/pm [repo-dir] [claude args...]
+# Usage: bin/pm <repo-dir> [claude args...]   (PM_SETTINGS=<file> overrides the permission settings)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-REPO="${1:-/tmp/h1-demo}"; shift || true
+ARG="${1:?usage: bin/pm <repo-dir> [claude args...]}"; shift
+REPO="$(cd "$ARG" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null)" || { echo "bin/pm: $ARG is not a git repo" >&2; exit 1; }
 [[ "${HERDR_ENV:-}" == 1 ]] || echo "warning: not inside a herdr pane; set HERDR_SESSION=<name> for dispatch.sh" >&2
 export PATH="$HOME/.local/bin:$PATH"
+
+# Render the settings template: @ROOT@ = this checkout, @HOME@ = $HOME (both absolute paths;
+# templates write /@ROOT@ or /@HOME@ where a permission rule needs the //absolute form).
+settings="$(mktemp "${TMPDIR:-/tmp}/pm-settings.XXXXXX.json")"
+sed -e "s#@ROOT@#$ROOT#g" -e "s#@HOME@#$HOME#g" "${PM_SETTINGS:-$ROOT/proposed/settings.json}" > "$settings"
+
 cd "$ROOT"   # the dispatch skill is project-scoped to this repo
 exec claude \
-  --settings "$ROOT/proposed/settings.json" \
+  --settings "$settings" \
   --append-system-prompt-file "$ROOT/pm-role.CLAUDE.md" \
   --add-dir "$REPO" --add-dir "$HOME/.herdr/worktrees" \
   "$@"

@@ -4,11 +4,12 @@
 # target agents by name only, result.json as the completion signal.
 #
 # Usage:
-#   dispatch.sh start   <id> <repo> [--kind opencode|claude] [--model M] [--base REF]
+#   dispatch.sh start   <id> <repo> [--kind opencode|claude] [--model M] [--base REF] [--approve auto|manual]
 #   dispatch.sh prompt  <id> [text]     # default text: "Read and execute .delegate/<id>/brief.md"
 #   dispatch.sh wait    <id> [timeout_s]
 #   dispatch.sh status  <id>
 #   dispatch.sh read    <id> [lines]
+#   dispatch.sh cost    <id>        # tokens + USD of the worker's OpenCode sessions (run before finish)
 #   dispatch.sh approve <id> | reject <id>
 #   dispatch.sh integrate <id> <commit message>   # commit worker changes + ff-merge into repo HEAD
 #   dispatch.sh finish  <id> [--keep-branch|--discard]
@@ -33,17 +34,29 @@ h() {
   if [[ -n "${HERDR_SESSION:-}" ]]; then herdr --session "$HERDR_SESSION" "$@"; else herdr "$@"; fi
 }
 state_file() { echo "$STATE_ROOT/$1.json"; }
+SKILL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Mark one directory as trusted in Claude Code's config, so a worker there skips the folder-trust
+# dialog (herdr does not recognise it). Trust is per exact path; parents are not inherited.
+claude_cfg_edit() { # <jq filter> <dir>: edit Claude's config in place, keeping the file's mode
+  local cfg="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json" out
+  [[ -f "$cfg" ]] || return 0
+  out="$(jq --arg d "$2" "$1" "$cfg")" && printf '%s\n' "$out" > "$cfg"
+}
+claude_trust()   { claude_cfg_edit '.projects[$d] = ((.projects[$d] // {}) + {hasTrustDialogAccepted: true})' "$1"; }
+claude_untrust() { claude_cfg_edit 'del(.projects[$d])' "$1"; }
 st() { jq -r "$2" "$(state_file "$1")"; }
 agent_status() { h agent get "$1" 2>/dev/null | jq -r '.result.agent.agent_status // "missing"'; }
 
 cmd_start() {
   local id="$1" repo="$2"; shift 2
-  local kind=opencode model="" base=""
+  local kind=opencode model="" base="" approve=auto
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --kind) kind="$2"; shift 2 ;;
       --model) model="$2"; shift 2 ;;
       --base) base="$2"; shift 2 ;;
+      --approve) approve="$2"; shift 2 ;;
       *) die "unknown flag $1" ;;
     esac
   done
@@ -70,16 +83,24 @@ cmd_start() {
   # 3. agent
   local agent_args=()
   case "$kind" in
-    opencode) agent_args=(-- --standalone); [[ -n "$model" ]] && agent_args+=(-m "$model") ;;
-    claude)   agent_args=(-- --permission-mode acceptEdits); [[ -n "$model" ]] && agent_args+=(--model "$model") ;;
+    # approve=auto: OpenCode --auto approves everything not explicitly denied (worker.md deny rules are the
+    # guardrail); Claude auto mode lets its classifier decide. approve=manual: the PM answers every ask.
+    opencode) agent_args=(-- --standalone); [[ "$approve" == auto ]] && agent_args+=(--auto)
+              [[ -n "$model" ]] && agent_args+=(-m "$model") ;;
+    claude)
+      # Own settings, not the PM's user settings (which may enable auto mode); trust only this worktree.
+      claude_trust "$path"
+      agent_args=(-- --setting-sources project,local --settings "$SKILL_ROOT/../../../claude-worker/settings.json"
+                  --permission-mode "$([[ "$approve" == auto ]] && echo auto || echo acceptEdits)")
+      [[ -n "$model" ]] && agent_args+=(--model "$model") ;;
     *) die "unsupported kind $kind" ;;
   esac
   local out; out="$(h agent start "$id" --kind "$kind" --pane "$pane" --timeout 90000 "${agent_args[@]}" 2>&1)" || true
 
   mkdir -p "$STATE_ROOT"
   jq -n --arg id "$id" --arg repo "$repo" --arg path "$path" --arg ws "$ws" --arg pane "$pane" \
-        --arg kind "$kind" --arg model "$model" --arg branch "ds/$id" \
-        '{id:$id,repo:$repo,worktree:$path,branch:$branch,workspace:$ws,pane:$pane,kind:$kind,model:$model}' \
+        --arg kind "$kind" --arg model "$model" --arg branch "ds/$id" --arg approve "$approve" \
+        '{id:$id,repo:$repo,worktree:$path,branch:$branch,workspace:$ws,pane:$pane,kind:$kind,model:$model,approve:$approve}' \
         > "$(state_file "$id")"
   jq -c --arg s "$(agent_status "$id")" '. + {agent_status:$s}' "$(state_file "$id")"
   if [[ "$(agent_status "$id")" == missing ]]; then
@@ -133,6 +154,42 @@ cmd_status() {
         '. + {agent_status:$s, has_result:$has_result, changes:$diff}' "$(state_file "$id")"
 }
 
+# Token usage and cost of the worker's OpenCode sessions in this task's worktree (needs model `cost`
+# entries in opencode.json; cost is 0 otherwise). Claude-kind workers report no cost here.
+cmd_cost() {
+  local id="$1" wt repo; wt="$(st "$id" .worktree)"; repo="$(st "$id" .repo)"
+  if [[ "$(st "$id" .kind)" != opencode ]]; then
+    jq -nc --arg id "$id" --arg kind "$(st "$id" .kind)" \
+      '{id:$id, kind:$kind, cost:null, note:"cost not tracked for this worker kind; see LiteLLM spend logs"}'
+    return 0
+  fi
+  # sessions are grouped under the main repo's project; list from there and match the worktree dir
+  local sessions; sessions="$(cd "$repo" && opencode session list --standalone --format json -n 50 2>/dev/null \
+    | jq -r --arg d "$wt" '.[] | select(.directory == $d) | .id')"
+  local total='{"cost":0,"input":0,"output":0,"reasoning":0,"cache_read":0,"steps":0}' s
+  for s in $sessions; do
+    total="$( (cd "$repo" && opencode session export "$s" --standalone 2>/dev/null) | jq -c --argjson t "$total" '
+      [.. | objects | select(has("tokens") and has("cost"))] as $steps
+      | {cost: ($t.cost + ([$steps[].cost] | add // 0)),
+         input: ($t.input + ([$steps[].tokens.input] | add // 0)),
+         output: ($t.output + ([$steps[].tokens.output] | add // 0)),
+         reasoning: ($t.reasoning + ([$steps[].tokens.reasoning // 0] | add // 0)),
+         cache_read: ($t.cache_read + ([$steps[].tokens.cache.read // 0] | add // 0)),
+         steps: ($t.steps + ($steps | length))}')"
+  done
+  # Sessions from before prices were configured recorded cost 0: estimate from tokens and current prices.
+  local model; model="$(st "$id" '.model // ""')"; model="${model:-litellm/deepseek-v4.1-flash}"
+  local price; price="$(jq -c --arg m "${model#*/}" '.provider.litellm.models[$m].cost // {}' \
+    "${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/opencode.json" 2>/dev/null || echo '{}')"
+  jq -c --arg id "$id" --arg model "$model" --argjson n "$(wc -w <<<"$sessions")" --argjson p "$price" '
+    (if .cost == 0 and ($p | length) > 0 then
+       {cost: ((.input * ($p.input // 0)
+               + .cache_read * ($p.cache_read // $p.input // 0)
+               + (.output + .reasoning) * ($p.output // 0)) / 1e6), cost_estimated: true}
+     else {} end) as $est
+    | {id:$id, model:$model, sessions:$n} + . + $est | .cost |= (.*1e6|round/1e6)' <<<"$total"
+}
+
 # Scrollback reads only work while idle; fall back to the visible screen (e.g. when blocked).
 cmd_read() {
   local out
@@ -148,13 +205,24 @@ cmd_reject()  { h agent send-keys "$1" esc   | jq -c '.result.type // .'; }
 cmd_integrate() {
   local id="$1"; shift
   local msg="${*:-}"
-  [[ -n "$msg" ]] || die "usage: integrate <id> <commit message>"
   local wt repo branch; wt="$(st "$id" .worktree)"; repo="$(st "$id" .repo)"; branch="$(st "$id" .branch)"
   git -C "$wt" add -A
-  if git -C "$wt" diff --cached --quiet; then
+  if ! git -C "$wt" diff --cached --quiet; then
+    [[ -n "$msg" ]] || die "usage: integrate <id> <commit message>"
+    git -C "$wt" commit -q -m "$msg"
+  elif git -C "$repo" merge-base --is-ancestor "$branch" HEAD; then
     die "no changes to integrate in $wt"
   fi
-  git -C "$wt" commit -q -m "$msg"
+  # else: re-run after resolving a conflict - nothing staged, the task commit is already on the branch
+  # Parallel tasks: the repo's branch may have moved since this worktree was created. Rebase onto it;
+  # on conflict, abort and leave the commit on the task branch for the PM to resolve.
+  local target; target="$(git -C "$repo" symbolic-ref --short HEAD)"
+  if ! git -C "$repo" merge-base --is-ancestor "$target" "$branch"; then
+    git -C "$wt" rebase -q "$target" 2>/dev/null || {
+      git -C "$wt" rebase --abort 2>/dev/null || true
+      die "rebase of $branch onto $target conflicts; resolve in $wt (git rebase $target), then re-run integrate"
+    }
+  fi
   git -C "$repo" merge --ff-only -q "$branch" || die "fast-forward failed; rebase $branch or merge manually"
   jq -nc --arg id "$id" --arg commit "$(git -C "$repo" rev-parse --short HEAD)" '{id:$id,integrated:true,commit:$commit}'
 }
@@ -177,6 +245,7 @@ cmd_finish() {
   h agent send-keys "$id" ctrl+c >/dev/null 2>&1 || true
   sleep 1
   h worktree remove --workspace "$ws" --force >/dev/null 2>&1 || git -C "$repo" worktree remove --force "$wt"
+  [[ "$(st "$id" .kind)" == claude ]] && claude_untrust "$wt"
   if [[ "$flag" != --keep-branch ]]; then
     git -C "$repo" branch -D "$branch" -q 2>/dev/null || true
   fi
@@ -186,6 +255,6 @@ cmd_finish() {
 
 sub="${1:-}"; shift || true
 case "$sub" in
-  start|prompt|wait|status|read|approve|reject|integrate|finish) "cmd_$sub" "$@" ;;
+  start|prompt|wait|status|read|cost|approve|reject|integrate|finish) "cmd_$sub" "$@" ;;
   *) sed -n '2,15p' "$0"; exit 2 ;;
 esac

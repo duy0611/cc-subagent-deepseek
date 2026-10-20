@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(@ROOT@/.claude/skills/dispatch/dispatch.sh:*)",
+      "Bash(cat:*)",
+      "Bash(cd /tmp/mdx-demo:*)",
+      "Bash(git -C:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git status:*)",
+      "Bash(git:*)",
+      "Bash(jq:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir -p /tmp/mdx-demo/.delegate:*)",
+      "Bash(node --test:*)",
+      "Bash(npm --prefix:*)",
+      "Bash(npm test:*)",
+      "Edit(/@HOME@/.herdr/worktrees/**/.delegate/**)",
+      "Edit(//tmp/mdx-demo/.delegate/**)",
+      "Read(/@HOME@/.herdr/worktrees/**)",
+      "Read(//tmp/mdx-demo/**)"
+    ],
+    "deny": [
+      "Bash(git push:*)",
+      "Read(/@ROOT@/demo/.reference/**)",
+      "Bash(cat demo/.reference:*)"
+    ]
+  }
+}

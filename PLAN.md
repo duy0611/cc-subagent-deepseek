@@ -49,7 +49,7 @@ Claude in Claude Code), so no built-in tool is lost.
 - Persistent state volume at `/var/dev-state`: `CLAUDE_CONFIG_DIR`, `OPENCODE_CONFIG_DIR=/var/dev-state/opencode`,
   `HERMES_HOME` and `GIT_CONFIG_GLOBAL` all live there.
 - Secrets are stored as references, never values (`literal:`, `keychain:`, `op://…`), set with `dev workspace set KEY SPEC`
-  and injected as env vars. That's how `LITELLM_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` reach the container.
+  and injected as env vars. That's how `LITELLM_BASE_URL` and `LITELLM_API_KEY` reach the container.
 - Security modes:
   | mode | `.git` | Use for |
   |---|---|---|
@@ -255,7 +255,7 @@ Never send a prompt to an agent that isn't idle/done; read its screen first.
 - Dry run: the PM dispatches one real, small task from one of your repos while you watch in `herdr`.
 - **Exit:** 5 real tasks of different sizes completed end to end, with the PM's interventions noted.
 
-### H2: Parallel and hardening (1 day)
+### H2: Parallel and hardening ✅ DONE 2026-10-20, see H2-RESULTS.md
 - 2–3 parallel workers in separate worktrees. The PM uses background waits and gets a notification for each.
 - Tune the worker prompt, the brief template and the `bash` allowlist from what went wrong in H1.
 - Add escalation workers (Claude Code `--kind claude` with Sonnet or Haiku through LiteLLM).

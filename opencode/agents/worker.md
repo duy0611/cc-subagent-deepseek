@@ -30,8 +30,18 @@ permission:
     "pytest*": allow
     "git commit*": deny
     "git push*": deny
+    "git reset*": deny
+    "git rebase*": deny
+    "git checkout*": deny
+    "git clean*": deny
     "rm -rf*": deny
+    "rm -r *": deny
+    "sudo*": deny
     "curl*": deny
+    "wget*": deny
+    "ssh*": deny
+    "npm publish*": deny
+    "npm install *": deny
 ---
 You are an implementation worker. A project manager gives you a brief file.
 Do exactly what the brief says, stay within its Scope, never commit, never weaken tests.

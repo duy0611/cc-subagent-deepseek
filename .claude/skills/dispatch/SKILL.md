@@ -12,7 +12,7 @@ transient idle; agents are targeted by name only).
 
 Call it by its **absolute path, as a plain command**: no `D=` variable, no `cd … &&` prefix, one command per Bash call.
 That way the permission allow rule for the script matches, and the user isn't prompted for every step.
-Below, `$D` stands for that absolute path (for example `/workspaces/<project>/.claude/skills/dispatch/dispatch.sh`).
+Below, `$D` stands for that absolute path (`<this checkout>/.claude/skills/dispatch/dispatch.sh`; `bin/pm` starts you in the checkout, so use `$PWD/.claude/skills/dispatch/dispatch.sh` resolved to its full path).
 
 When piping its JSON to jq, use `printf '%s\n' "$out"`, not `echo` (zsh's echo mangles backslashes).
 
@@ -29,7 +29,14 @@ Requires herdr on PATH and a running herdr server. Outside herdr (`HERDR_ENV` un
 $D start <id> <repo>                                     # OpenCode + DeepSeek (default)
 $D start <id> <repo> --kind opencode --model litellm/claude-sonnet-5-5   # escalation, same harness
 $D start <id> <repo> --kind claude --model claude-sonnet-5-5             # escalation, Claude Code
+                                                                         # (own settings from claude-worker/settings.json,
+                                                                         #  worktree pre-trusted; cost not tracked)
 ```
+Workers start with **auto-approval** by default (`--approve auto`). OpenCode runs with `--auto`, which approves
+everything not explicitly denied, so the deny rules in its `worker` agent are the guardrail. Claude runs in auto mode,
+where its classifier decides. Add `--approve manual` for sensitive repos: every non-allowlisted command then
+comes to you as `blocked`.
+
 It prints JSON with `worktree` (the checkout path), `branch` (`ds/<id>`) and `agent_status`. If the agent wasn't
 detected (a startup dialog), run `$D read <id>` and decide.
 
@@ -70,8 +77,10 @@ $D finish <id>                         # stops the agent, removes worktree+works
 ```
 Commits are made by you (the PM), never by the worker. `finish` refuses to throw away uncommitted or unmerged
 work. Use `--keep-branch` to keep a rejected attempt for reference, and use `--discard` only when you mean to drop the work.
-If the fast-forward fails because `<repo>` moved on, rebase `ds/<id>` (or merge it) yourself, then `finish`.
+If `<repo>` moved on (parallel tasks), `integrate` rebases `ds/<id>` onto it automatically. On a conflict it aborts the
+rebase and leaves the commit on `ds/<id>`: resolve it in the worktree (`git rebase <branch>`, fix, `git rebase --continue`),
+then re-run `$D integrate <id>` (no message needed). Integrate parallel tasks **one at a time**.
 
 ## 8. Log
-Append one line to `<repo>/.delegate/ledger.jsonl`:
-`{"id","date","kind","model","rounds","outcome":"accepted|rejected|escalated","notes"}`.
+Run `$D cost <id>` **before** `finish` (it reads the worker's sessions), then append one line to `<repo>/.delegate/ledger.jsonl` (`mkdir -p <repo>/.delegate` first):
+`{"id","date","kind","model","rounds","approvals","outcome":"accepted|rejected|escalated","cost_usd","notes"}`.

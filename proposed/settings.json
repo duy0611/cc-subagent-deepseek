@@ -1,15 +1,15 @@
 {
   "permissions": {
     "allow": [
-      "Bash(/workspaces/cc-subagent-deepseek/.claude/skills/dispatch/dispatch.sh:*)",
+      "Bash(@ROOT@/.claude/skills/dispatch/dispatch.sh:*)",
       "Bash(git -C:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
       "Bash(npm test:*)",
       "Bash(npm --prefix:*)",
-      "Read(//home/vscode/.herdr/worktrees/**)",
-      "Edit(//home/vscode/.herdr/worktrees/**/.delegate/**)"
+      "Read(/@HOME@/.herdr/worktrees/**)",
+      "Edit(/@HOME@/.herdr/worktrees/**/.delegate/**)"
     ],
     "deny": [
       "Bash(git push:*)"

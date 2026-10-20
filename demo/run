@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# mdx demo: a Claude PM builds a Markdown-to-HTML converter from SPEC.md by delegating to DeepSeek workers.
+#
+#   demo/run          inside a herdr pane: reset the demo repo and start the PM in this pane
+#   demo/run reset    only reset the demo repo (and clean up leftover worktrees/tasks)
+#   demo/run check    show the demo's result: tests, commits, ledger, report
+#
+# Env: DEMO_REPO (default /tmp/mdx-demo), PM_MODEL (default claude-opus-5-5)
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="${DEMO_REPO:-/tmp/mdx-demo}"
+export PATH="$HOME/.local/bin:$PATH"
+
+reset() {
+  if [[ -d "$REPO/.git" ]]; then
+    for wt in $(git -C "$REPO" worktree list --porcelain | awk '/^worktree /{print $2}' | tail -n +2); do
+      git -C "$REPO" worktree remove --force "$wt"
+    done
+  fi
+  rm -rf "$REPO" "$HOME/.herdr/worktrees/$(basename "$REPO")"
+  rm -f "${XDG_STATE_HOME:-$HOME/.local/state}"/dispatch/t-*.json
+  cp -r "$ROOT/demo/mdx" "$REPO"
+  git -C "$REPO" init -q -b main
+  git -C "$REPO" add -A
+  git -C "$REPO" commit -qm "mdx: spec, skeleton and acceptance tests"
+  echo "demo repo ready: $REPO ($(cd "$REPO" && node --test 2>&1 | awk '/^ℹ fail/{print $3}') of 16 acceptance tests failing)"
+}
+
+check() {
+  echo "== tests";   (cd "$REPO" && node --test 2>&1 | grep -E '^ℹ (tests|pass|fail)')
+  echo "== commits"; git -C "$REPO" log --oneline
+  echo "== ledger";  jq -c '{id, kind, rounds, outcome, cost_usd}' "$REPO/.delegate/ledger.jsonl" 2>/dev/null || echo "(none yet)"
+  echo "== report";  cat "$REPO/.delegate/REPORT.md" 2>/dev/null || echo "(none yet)"
+}
+
+case "${1:-start}" in
+  reset) reset ;;
+  check) check ;;
+  start)
+    [[ "${HERDR_ENV:-}" == 1 ]] || { echo "Run this inside a herdr pane (start herdr first: herdr --session demo)." >&2; exit 1; }
+    reset
+    sed "s#\$REPO#$REPO#g" "$ROOT/demo/pm-goal.md" > "$REPO/.git/pm-goal.md"
+    sed "s#/tmp/mdx-demo#$REPO#g" "$ROOT/demo/pm-settings.json" > "$REPO/.git/pm-settings.json"
+    PM_SETTINGS="$REPO/.git/pm-settings.json" exec "$ROOT/bin/pm" "$REPO" \
+      --model "${PM_MODEL:-claude-opus-5-5}" --permission-mode auto "$(cat "$REPO/.git/pm-goal.md")"
+    ;;
+  *) sed -n '2,8p' "$0"; exit 2 ;;
+esac
